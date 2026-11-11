@@ -25,6 +25,7 @@ BTN_TOMORROW = "🌅 На завтра"
 BTN_WEEK = "🗓 Неделя"
 BTN_GROUP = "👥 Моя группа"
 BTN_CHANGE = "🔄 Сменить группу"
+BTN_NOTIFY = "🔔 Уведомления"
 
 PAGE_SIZE = 12
 
@@ -68,6 +69,20 @@ KIND_EMOJI = (
     ("физ", "🏃"),
 )
 
+# Мотивационные цитаты по дням недели
+WEEKDAY_QUOTES = [
+    "Понедельник задаёт тон всей неделе.",
+    "Вторник — время войти в ритм.",
+    "Среда: середина пути уже позади.",
+    "Четверг — финишная прямая всё ближе.",
+    "Пятница! Ещё немного — и выходные.",
+    "Суббота на парах — это сила воли.",
+    "Воскресенье — время собраться с мыслями.",
+]
+
+# Разделитель между карточками пар
+_SEP = "╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌"
+
 
 def lessons_word(count: int) -> str:
     if count % 10 == 1 and count % 100 != 11:
@@ -108,25 +123,76 @@ def format_week_range(start: date, end: date) -> str:
     return f"{start.day} {MONTHS[start.month - 1]} – {end.day} {MONTHS[end.month - 1]}"
 
 
+def _mins(hhmm: str) -> int:
+    """Переводит строку HH:MM в количество минут от полуночи."""
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _duration_str(minutes: int) -> str:
+    h, m = divmod(minutes, 60)
+    if h and m:
+        return f"{h}ч {m}мин"
+    if h:
+        return f"{h}ч"
+    return f"{m}мин"
+
+
+def _load_bar(count: int, max_count: int, width: int = 6) -> str:
+    """Визуализация загруженности дня: ░░▒▒▓▓ → ▓▓▓▓▓▓."""
+    if count == 0 or max_count == 0:
+        return "░" * width
+    filled = min(width, max(1, round(count / max_count * width)))
+    return "▓" * filled + "░" * (width - filled)
+
+
 def _lesson_card(lesson: Lesson) -> str:
-    lines = [
-        f"🕘 <b>{lesson.number} пара · {lesson.start}–{lesson.end}</b>",
-        f"{kind_emoji(lesson.kind)} <b>{escape(lesson.name)}</b>",
-    ]
-    meta: list[str] = []
+    header = f"⏰  <b>Пара {lesson.number}  ·  {lesson.start} — {lesson.end}</b>"
+    name_line = f"📚  <b>{escape(lesson.name)}</b>"
+
+    lines: list[str] = [header, "", name_line]
+
     if lesson.kind:
-        meta.append(escape(lesson.kind))
+        lines.append(f"📝  {escape(lesson.kind)}")
     if lesson.classroom:
-        meta.append(f"📍 {escape(lesson.classroom)}")
-    if meta:
-        lines.append(" · ".join(meta))
+        lines.append(f"📍  {escape(lesson.classroom)}")
     if lesson.lecturers:
-        lines.append("👤 " + escape(", ".join(lesson.lecturers)))
+        lines.append(f"👤  {escape(', '.join(lesson.lecturers))}")
+
     window = lesson.break_window
     if window:
-        start, end, minutes = window
-        lines.append(f"☕ Перерыв {start}–{end} · {minutes} мин")
-    return "<blockquote>" + "\n".join(lines) + "</blockquote>"
+        s, e, mins = window
+        lines.append("")
+        lines.append(f"☕  <i>Перерыв {s}–{e} · {mins} мин</i>")
+
+    return "\n".join(lines)
+
+
+def render_day_summary(lessons: list[Lesson]) -> str:
+    """Краткий дайджест дня: число пар, временной охват, первая и последняя пара."""
+    if not lessons:
+        return ""
+
+    first = lessons[0]
+    last = lessons[-1]
+    total = len(lessons)
+
+    try:
+        span = _mins(last.end) - _mins(first.start)
+        time_info = f"⏱ <b>{first.start} — {last.end}</b>  ({_duration_str(span)})"
+    except ValueError:
+        time_info = f"⏱ <b>{first.start} — {last.end}</b>"
+
+    lines = [f"📊 <b>{total} {lessons_word(total)}</b>  ·  {time_info}"]
+
+    if total >= 2 and first.name != last.name:
+        lines.append(
+            f"▶️ <i>{escape(first.name)}</i>  →  <i>{escape(last.name)}</i>"
+        )
+    elif total == 1:
+        lines.append(f"▶️ <i>{escape(first.name)}</i>")
+
+    return "\n".join(lines)
 
 
 def render_schedule(
@@ -139,21 +205,26 @@ def render_schedule(
     lines = [
         f"<b>📅 {escape(header_title(day))}</b>",
         f"👥 Группа <b>{escape(group)}</b>",
-        "",
     ]
+
     if not lessons:
+        lines.append("")
         lines.append("🎉 <b>Пар нет</b>")
-        lines.append("<i>Свободный день — отдыхайте.</i>")
+        lines.append(f"<i>{WEEKDAY_QUOTES[day.weekday()]} Отдыхайте!</i>")
         return "\n".join(lines)
 
-    for lesson in lessons:
-        lines.append(_lesson_card(lesson))
-        lines.append("")
+    summary = render_day_summary(lessons)
+    if summary:
+        lines.append(summary)
+    lines.append("")
 
-    total = len(lessons)
-    lines.append(
-        f"<i>Всего {total} {lessons_word(total)} · обновлено в {_time(updated_at)}</i>"
-    )
+    for i, lesson in enumerate(lessons):
+        lines.append(_lesson_card(lesson))
+        if i < len(lessons) - 1:
+            lines.append(f"<i>{_SEP}</i>")
+
+    lines.append("")
+    lines.append(f"<i>Обновлено в {_time(updated_at)}</i>")
     return "\n".join(lines)
 
 
@@ -166,27 +237,49 @@ def render_week(
 ) -> str:
     week_end = week_start + timedelta(days=6)
     lines = [
-        f"<b>🗓 Неделя · {escape(format_week_range(week_start, week_end))}</b>",
+        f"<b>🗓 Неделя  ·  {escape(format_week_range(week_start, week_end))}</b>",
         f"👥 Группа <b>{escape(group)}</b>",
         "",
     ]
-    total = 0
+
+    counts: dict[date, int] = {}
+    for i in range(7):
+        d = week_start + timedelta(days=i)
+        counts[d] = len(lessons_by_day.get(d, []))
+
+    max_count = max(counts.values(), default=1) or 1
+    total = sum(counts.values())
+    today_date = today()
+
     for index in range(7):
         day = week_start + timedelta(days=index)
-        count = len(lessons_by_day.get(day, []))
-        total += count
-        suffix = " · <i>сегодня</i>" if day == today() else ""
-        if count:
-            summary = f"{count} {lessons_word(count)}"
+        count = counts[day]
+        bar = _load_bar(count, max_count)
+        day_str = f"{day.day} {MONTHS[day.month - 1]}"
+
+        count_label = f"{count} {lessons_word(count)}" if count else "—"
+
+        if day == today_date:
+            line = (
+                f"<b>{WEEKDAY_SHORT[index]}</b> · {day_str} · "
+                f"{bar} · <b>{count_label}</b>  <i>◀ сегодня</i>"
+            )
+        elif count == 0:
+            line = (
+                f"<b>{WEEKDAY_SHORT[index]}</b> · {day_str} · "
+                f"{bar} · <i>{count_label}</i>"
+            )
         else:
-            summary = "<i>пар нет</i>"
-        lines.append(
-            f"<b>{WEEKDAY_SHORT[index]}</b> · {day.day} "
-            f"{MONTHS[day.month - 1]} — {summary}{suffix}"
-        )
+            line = (
+                f"<b>{WEEKDAY_SHORT[index]}</b> · {day_str} · "
+                f"{bar} · {count_label}"
+            )
+        lines.append(line)
+
     lines.append("")
     lines.append(
-        f"<i>Всего {total} {lessons_word(total)} · обновлено в {_time(updated_at)}</i>"
+        f"<b>Итого:</b> {total} {lessons_word(total)} за неделю  ·  "
+        f"<i>обновлено в {_time(updated_at)}</i>"
     )
     lines.append("")
     lines.append("Выберите день 👇")
@@ -207,10 +300,11 @@ def render_welcome(
             "<code>746-1</code>."
         )
 
+    quote = WEEKDAY_QUOTES[reference.weekday()]
     lines = [
         "👋 <b>Привет! Это ваше расписание</b>",
         "",
-        "Пары, аудитории, преподаватели и перерывы — в одном сообщении.",
+        f"<i>{quote}</i>",
         "",
         f"👥 Группа: <b>{escape(group)}</b>",
     ]
@@ -407,3 +501,27 @@ def not_found_kb() -> InlineKeyboardMarkup:
     builder.button(text="🏠 В меню", callback_data="menu")
     builder.adjust(2)
     return builder.as_markup()
+
+
+def render_notify_menu(enabled: bool) -> str:
+    status = "✅ включены" if enabled else "❌ выключены"
+    return (
+        f"🔔 <b>Уведомления</b>\n\n"
+        f"Статус: <b>{status}</b>\n\n"
+        "<i>Бот будет напоминать:\n"
+        "• За 15 мин до начала пары\n"
+        "• В момент перерыва внутри пары</i>"
+    )
+
+
+def notify_kb(enabled: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    if enabled:
+        builder.button(text="🔕 Выключить уведомления", callback_data="notify:off")
+    else:
+        builder.button(text="🔔 Включить уведомления", callback_data="notify:on")
+    builder.button(text="🏠 В меню", callback_data="menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+

@@ -15,6 +15,7 @@ from aiogram.types import BotCommand, CallbackQuery, Message
 import config
 import ui
 from group_catalog import GroupCatalog, is_group_like, normalize_group
+from notifier import NotificationScheduler
 from schedule_api import TimetableAPI, today
 from storage import UserStore
 
@@ -326,6 +327,33 @@ async def cb_noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.message(Command("notify"))
+@router.message(F.text == ui.BTN_NOTIFY)
+async def cmd_notify(message: Message, store) -> None:
+    enabled = await store.get_notifications(message.from_user.id)
+    await message.answer(
+        ui.render_notify_menu(enabled),
+        reply_markup=ui.notify_kb(enabled),
+    )
+
+
+@router.callback_query(F.data.startswith("notify:"))
+async def cb_notify(callback: CallbackQuery, store) -> None:
+    action = callback.data.split(":")[1]
+    enabled = action == "on"
+    await store.set_notifications(callback.from_user.id, enabled)
+    if callback.message:
+        try:
+            await callback.message.edit_text(
+                ui.render_notify_menu(enabled),
+                reply_markup=ui.notify_kb(enabled),
+            )
+        except TelegramBadRequest:
+            pass
+    status_text = "включены ✅" if enabled else "выключены ❌"
+    await callback.answer(f"Уведомления {status_text}")
+
+
 @router.message(F.text.is_not(None))
 async def any_group_text(
     message: Message, store, catalog: GroupCatalog, api: TimetableAPI
@@ -390,11 +418,14 @@ async def main() -> None:
                 BotCommand(command="week", description="🗓 Неделя"),
                 BotCommand(command="group", description="👥 Моя группа"),
                 BotCommand(command="change", description="🔄 Сменить группу"),
+                BotCommand(command="notify", description="🔔 Уведомления"),
                 BotCommand(command="help", description="ℹ️ Помощь"),
             ]
         )
         await bot.delete_webhook(drop_pending_updates=True)
         log.info("Бот запущен, групп в каталоге: %s", len(catalog.all_groups))
+        notifier = NotificationScheduler(bot, store, api)
+        asyncio.create_task(notifier.run())
         await dispatcher.start_polling(bot)
 
 
