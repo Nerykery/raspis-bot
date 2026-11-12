@@ -42,40 +42,74 @@ class NotificationScheduler:
 
     async def _tick(self) -> None:
         now = datetime.now(ZoneInfo("Asia/Tomsk"))
-        now_minutes = now.hour * 60 + now.minute
+        now_m = now.hour * 60 + now.minute
         date_str = now.date().isoformat()
 
         users = await self._store.get_all_users_with_notifications()
+        log.info(
+            "Notifier tick %s — пользователей с уведомлениями: %d",
+            now.strftime("%H:%M"),
+            len(users),
+        )
+
         for user_id, group in users:
+            settings = await self._store.get_notify_settings(user_id)
             try:
                 lessons = await self._api.get_lessons(group, now.date())
             except Exception:
+                log.exception("Не удалось получить расписание для %s", group)
                 continue
             if not lessons:
                 continue
 
             for lesson in lessons:
                 start_m = _hm(lesson.start)
+                end_m = _hm(lesson.end)
                 break_m = start_m + 45
 
-                # За 15 минут до начала
-                key_start = f"start_{lesson.number}"
-                if (now_minutes == start_m - NOTIFY_BEFORE
-                        and (user_id, date_str, key_start) not in self._sent):
-                    self._sent.add((user_id, date_str, key_start))
-                    await self._send_before_start(user_id, lesson)
+                # За 15 мин до начала
+                if settings.get("before_start"):
+                    key = f"start_{lesson.number}"
+                    if self._in_window(start_m - NOTIFY_BEFORE, now_m) and (
+                        user_id,
+                        date_str,
+                        key,
+                    ) not in self._sent:
+                        self._sent.add((user_id, date_str, key))
+                        await self._send_before_start(user_id, lesson)
 
-                # Перерыв (45-я минута пары)
-                key_break = f"break_{lesson.number}"
-                if (now_minutes == break_m
-                        and (user_id, date_str, key_break) not in self._sent):
-                    self._sent.add((user_id, date_str, key_break))
-                    # Перерыв только если пара достаточно длинная
-                    end_m = _hm(lesson.end)
-                    if end_m - break_m >= BREAK_MINUTES:
+                # За 15 мин до конца
+                if settings.get("before_end"):
+                    key = f"end_{lesson.number}"
+                    if self._in_window(end_m - NOTIFY_BEFORE, now_m) and (
+                        user_id,
+                        date_str,
+                        key,
+                    ) not in self._sent:
+                        self._sent.add((user_id, date_str, key))
+                        await self._send_before_end(user_id, lesson)
+
+                # Перерыв в середине пары
+                if settings.get("break") and end_m - break_m >= BREAK_MINUTES:
+                    key = f"break_{lesson.number}"
+                    if self._in_window(break_m, now_m) and (
+                        user_id,
+                        date_str,
+                        key,
+                    ) not in self._sent:
+                        self._sent.add((user_id, date_str, key))
                         from schedule_api import _to_hhmm
+
                         break_end = _to_hhmm(break_m + BREAK_MINUTES)
                         await self._send_break(user_id, lesson, break_end)
+
+    @staticmethod
+    def _in_window(target: int, now: int) -> bool:
+        """True если target попадает в текущую или предыдущую минуту.
+
+        Двухминутное окно страхует от дрейфа asyncio.sleep(60).
+        """
+        return target in (now, now - 1)
 
     async def _send_before_start(self, user_id: int, lesson) -> None:
         text = (
@@ -87,6 +121,14 @@ class NotificationScheduler:
         if lesson.classroom:
             text += f"📍  {escape(lesson.classroom)}\n"
         text += f"\n🕐  {lesson.start} — {lesson.end}"
+        await self._safe_send(user_id, text)
+
+    async def _send_before_end(self, user_id: int, lesson) -> None:
+        text = (
+            f"⏰  <b>Через {NOTIFY_BEFORE} минут</b> пара закончится\n\n"
+            f"📚  <b>{escape(lesson.name)}</b>\n"
+            f"🕐  {lesson.start} — {lesson.end}"
+        )
         await self._safe_send(user_id, text)
 
     async def _send_break(self, user_id: int, lesson, break_end: str) -> None:

@@ -57,10 +57,37 @@ class UserStore:
             self._users.setdefault(str(user_id), {})["notifications"] = enabled
             self._flush()
 
+    async def get_notify_settings(self, user_id: int) -> dict:
+        """Возвращает {"before_start": bool, "before_end": bool, "break": bool}."""
+        async with self._lock:
+            raw = self._users.get(str(user_id), {}).get("notify_settings") or {}
+            return {
+                "before_start": bool(raw.get("before_start", False)),
+                "before_end": bool(raw.get("before_end", False)),
+                "break": bool(raw.get("break", False)),
+            }
+
+    async def set_notify_setting(self, user_id: int, key: str, value: bool) -> None:
+        async with self._lock:
+            user = self._users.setdefault(str(user_id), {})
+            settings = dict(user.get("notify_settings") or {})
+            settings[key] = value
+            user["notify_settings"] = settings
+            self._flush()
+
     async def get_all_users_with_notifications(self) -> list[tuple[int, str]]:
+        """Пользователи, у которых включено хотя бы одно уведомление."""
         async with self._lock:
             result: list[tuple[int, str]] = []
             for uid_str, data in self._users.items():
-                if data.get("notifications") and data.get("group"):
+                settings = data.get("notify_settings") or {}
+                has_any = any(
+                    [
+                        settings.get("before_start"),
+                        settings.get("before_end"),
+                        settings.get("break"),
+                    ]
+                )
+                if has_any and data.get("group"):
                     result.append((int(uid_str), data["group"]))
             return result

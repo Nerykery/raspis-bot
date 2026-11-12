@@ -379,7 +379,8 @@ def render_help() -> str:
         f"{BTN_TOMORROW} — пары на завтра\n"
         f"{BTN_WEEK} — обзор всей недели\n"
         f"{BTN_GROUP} — текущая группа\n"
-        f"{BTN_CHANGE} — выбор факультета и группы\n\n"
+        f"{BTN_CHANGE} — выбор факультета и группы\n"
+        f"{BTN_NOTIFY} — включить/выключить напоминания\n\n"
         "Ещё можно просто отправить номер группы сообщением, "
         "например <code>746-1</code>.\n\n"
         '<i>Данные: <a href="https://timetable.tusur.ru">timetable.tusur.ru</a></i>'
@@ -391,7 +392,7 @@ def main_menu_kb() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=BTN_SCHEDULE), KeyboardButton(text=BTN_TOMORROW)],
             [KeyboardButton(text=BTN_WEEK), KeyboardButton(text=BTN_GROUP)],
-            [KeyboardButton(text=BTN_CHANGE)],
+            [KeyboardButton(text=BTN_CHANGE), KeyboardButton(text=BTN_NOTIFY)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Группа или действие",
@@ -503,23 +504,37 @@ def not_found_kb() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def render_notify_menu(enabled: bool) -> str:
-    status = "✅ включены" if enabled else "❌ выключены"
+def render_notify_menu(settings: dict) -> str:
+    def mark(key: str) -> str:
+        return "✅" if settings.get(key) else "❌"
+
+    has_any = any(settings.values())
+    overall = "включены" if has_any else "выключены"
+
     return (
-        f"🔔 <b>Уведомления</b>\n\n"
-        f"Статус: <b>{status}</b>\n\n"
-        "<i>Бот будет напоминать:\n"
-        "• За 15 мин до начала пары\n"
-        "• В момент перерыва внутри пары</i>"
+        f"🔔 <b>Уведомления</b> — <i>{overall}</i>\n\n"
+        f"{mark('before_start')}  За 15 мин до <b>начала</b> пары\n"
+        f"{mark('before_end')}  За 15 мин до <b>конца</b> пары\n"
+        f"{mark('break')}  <b>Перерыв</b> в середине пары\n\n"
+        "<i>Нажми на строку, чтобы включить или выключить.</i>"
     )
 
 
-def notify_kb(enabled: bool) -> InlineKeyboardMarkup:
+def notify_kb(settings: dict) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    if enabled:
-        builder.button(text="🔕 Выключить уведомления", callback_data="notify:off")
-    else:
-        builder.button(text="🔔 Включить уведомления", callback_data="notify:on")
+
+    builder.button(
+        text=("✅ Начало пары" if settings.get("before_start") else "❌ Начало пары"),
+        callback_data="notify:toggle:before_start",
+    )
+    builder.button(
+        text=("✅ Конец пары" if settings.get("before_end") else "❌ Конец пары"),
+        callback_data="notify:toggle:before_end",
+    )
+    builder.button(
+        text=("✅ Перерыв" if settings.get("break") else "❌ Перерыв"),
+        callback_data="notify:toggle:break",
+    )
     builder.button(text="🏠 В меню", callback_data="menu")
     builder.adjust(1)
     return builder.as_markup()

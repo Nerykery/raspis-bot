@@ -330,28 +330,30 @@ async def cb_noop(callback: CallbackQuery) -> None:
 @router.message(Command("notify"))
 @router.message(F.text == ui.BTN_NOTIFY)
 async def cmd_notify(message: Message, store) -> None:
-    enabled = await store.get_notifications(message.from_user.id)
+    settings = await store.get_notify_settings(message.from_user.id)
     await message.answer(
-        ui.render_notify_menu(enabled),
-        reply_markup=ui.notify_kb(enabled),
+        ui.render_notify_menu(settings),
+        reply_markup=ui.notify_kb(settings),
     )
 
 
-@router.callback_query(F.data.startswith("notify:"))
+@router.callback_query(F.data.startswith("notify:toggle:"))
 async def cb_notify(callback: CallbackQuery, store) -> None:
-    action = callback.data.split(":")[1]
-    enabled = action == "on"
-    await store.set_notifications(callback.from_user.id, enabled)
+    key = callback.data.split(":")[-1]
+    settings = await store.get_notify_settings(callback.from_user.id)
+    new_value = not settings.get(key, False)
+    await store.set_notify_setting(callback.from_user.id, key, new_value)
+    settings[key] = new_value
     if callback.message:
         try:
             await callback.message.edit_text(
-                ui.render_notify_menu(enabled),
-                reply_markup=ui.notify_kb(enabled),
+                ui.render_notify_menu(settings),
+                reply_markup=ui.notify_kb(settings),
             )
         except TelegramBadRequest:
             pass
-    status_text = "включены ✅" if enabled else "выключены ❌"
-    await callback.answer(f"Уведомления {status_text}")
+    status_text = "включено ✅" if new_value else "выключено ❌"
+    await callback.answer(status_text)
 
 
 @router.message(F.text.is_not(None))
